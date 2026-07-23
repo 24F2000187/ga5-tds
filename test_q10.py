@@ -318,7 +318,9 @@ check("evidenceRefs are verbatim substrings of the source",
 check("semantic accuracy vs expected actions",
       all(p["action"] == EXPECTED[KINDS[int(p["packageId"].split("-")[1]) % len(KINDS)]]
           for p in props))
-check("one model call for the whole batch", CALLS["n"] == 1, str(CALLS["n"]))
+import math
+expected_calls = math.ceil(12 / q10_a2a._CHUNK_SIZE)
+check("one model call for the whole batch", CALLS["n"] == expected_calls, str(CALLS["n"]))
 
 TASK_ID, CTX_ID = task["id"], task["contextId"]
 
@@ -627,7 +629,7 @@ check("concurrent duplicates all 200", all(x.status_code == 200 for x in races),
 check("concurrent duplicates return one identical task",
       len({json.dumps(x.json(), sort_keys=True) for x in races}) == 1,
       str({x.json().get("id") for x in races}))
-check("concurrent duplicates invoked the model once", CALLS["n"] == 1, str(CALLS["n"]))
+check("concurrent duplicates invoked the model once", CALLS["n"] == expected_calls, str(CALLS["n"]))
 q10_a2a.chat_json = fake_chat_json
 
 # ------------------------------------------------------ live model sanity

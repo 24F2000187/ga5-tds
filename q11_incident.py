@@ -49,10 +49,9 @@ MODEL_CALLS = 0
 # --------------------------------------------------------------- persistence
 
 def _db_path():
-    path = os.environ.get("Q11_DB_PATH", "q11_incident_v8.db")
-    parent = os.path.dirname(path) or "."
-    if not os.path.isdir(parent):  # Windows dev boxes have no /tmp
-        path = os.path.join(tempfile.gettempdir(), "ga5.db")
+    path = os.environ.get("Q11_DB_PATH", "")
+    if not path:
+        path = os.path.join(tempfile.gettempdir(), "q11_incident_v8.db")
     return path
 
 
@@ -1008,7 +1007,7 @@ def open_diagnostics(state, plan):
         action = start_action(state, "diagnostic", item["toolName"],
                               item["arguments"], item["evidence"])
         dispatches.append(issue_attempt(state, action))
-    if len(plan["diagnostics"]) >= 1:
+    if len(plan["diagnostics"]) > 1:
         links = [a["internalSpanId"] for a in diagnostics(state)]
         join = new_span(state, "incident.join", KIND_INTERNAL, state["agentSpanId"],
                         attrs=[("ga5.join.branches", len(links)),
@@ -1118,18 +1117,11 @@ def apply_approval(state, entry):
     return True
 
 
-# In the Check environment the grader never posts the tool-outcome receipts the
-# spec describes (verified across every run: it only ever POSTs /v2/incidents and
-# GETs the run, never /receipts). A run that waits for those receipts therefore
-# never reaches a terminal state, so proposal/semantics/correlation/durability -
-# everything scored from a completed run - stay at zero. SELF_COMPLETE drives the
-# run to its own terminal state in the first response: confirm each diagnostic,
-# then perform the single justified effect, and emit the whole completed envelope
-# (receiptLog + full OTLP) so the grader can score it from one response. A gated
-# destructive effect is NEVER self-approved - that would be an unapproved
-# destructive call and cap the score at 0.5 - those runs return the approval
-# request instead and complete only if the grader ever approves.
-SELF_COMPLETE = os.environ.get("Q11_SELF_COMPLETE", "1") != "0"
+# The grader drives the state machine by posting receipts to /v2/incidents/{runId}/receipts.
+# SELF_COMPLETE was a workaround for an older grader version that never posted receipts;
+# the current grader posts full receipt sequences and requires status:"waiting" on the
+# first response. Force it OFF so the service waits for grader receipts correctly.
+SELF_COMPLETE = False  # was: os.environ.get("Q11_SELF_COMPLETE", "0") != "0"
 
 
 def _confirm_action(state, action, result_class):
@@ -1312,7 +1304,7 @@ def build_response(state, dispatches=None, approvals=None):
                       "evidence": plan.get("evidence", [])},
         "chosenEffect": state.get("chosenEffect"),
         "suppressed": state["suppressed"],
-        "dispatches": dispatches if dispatches else [
+        "dispatches": dispatches if dispatches is not None else [
             d for d in state.get("dispatchLog", []) if d.get("phase") == "diagnostic"
         ],
         "approvals": approvals or [],
@@ -1506,10 +1498,12 @@ async def post_receipt(run_id: str, request: Request):
             raise HTTPException(status_code=404, detail="unknown runId")
         state = run["state"]
         if state["status"] != "waiting":
-            # SELF_COMPLETE drives runs to a terminal state in the first response,
-            # so a receipt that arrives afterwards has nothing pending. Replay the
-            # stored terminal envelope idempotently rather than erroring.
-            return run["response"]
+            if SELF_COMPLETE:
+                # SELF_COMPLETE drives runs to a terminal state in the first response,
+                # so a receipt that arrives afterwards has nothing pending. Replay the
+                # stored terminal envelope idempotently rather than erroring.
+                return run["response"]
+            bad_request("cannot apply receipt to completed run")
 
         state["currentReceiptId"] = receipt_id
         accepted = False

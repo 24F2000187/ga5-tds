@@ -2,11 +2,12 @@
 reaches it: real HTTPS, real network, no TestClient."""
 import hashlib
 import json
+import time
 
 import httpx
 
-B = "https://ga5-tds.onrender.com"
-EMAIL = "24f2004141@ds.study.iitm.ac.in"
+B = "https://ga5-tds.vercel.app"
+EMAIL = "24f2000187@ds.study.iitm.ac.in"
 CANARY = "AGENT_GUARDRAIL_CANARY_54c3dc886628f3ce4d1f06ddaaa03146ef7fdc1e"
 fails = []
 c = httpx.Client(timeout=60, follow_redirects=False)
@@ -56,20 +57,20 @@ chk("Q5 empty continues", post("/q5/check", {"budget_tokens": 34000, "steps": []
 
 # Q6 — full MCP handshake over real HTTPS
 MH = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
-init = c.post(B + "/mcp", headers=MH, json={"jsonrpc": "2.0", "id": 1, "method": "initialize",
+init = c.post(B + "/mcp_new", headers=MH, json={"jsonrpc": "2.0", "id": 1, "method": "initialize",
                                             "params": {"protocolVersion": "2025-06-18", "capabilities": {},
                                                        "clientInfo": {"name": "grader", "version": "1"}}})
 chk("Q6 initialize", init.status_code == 200 and "result" in init.json(), init.text[:120])
 sid = init.headers.get("Mcp-Session-Id")
 MH2 = dict(MH, **({"Mcp-Session-Id": sid} if sid else {}))
-n = c.post(B + "/mcp", headers=MH2, json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+n = c.post(B + "/mcp_new", headers=MH2, json={"jsonrpc": "2.0", "method": "notifications/initialized"})
 chk("Q6 initialized notification 202", n.status_code == 202, n.status_code)
-tl = c.post(B + "/mcp", headers=MH2, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).json()
+tl = c.post(B + "/mcp_new", headers=MH2, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).json()
 chk("Q6 tool solve_challenge", [t["name"] for t in tl["result"]["tools"]] == ["solve_challenge"], tl)
 allok = True
 for i in range(5):
     ch = hashlib.sha256(f"live{i}".encode()).hexdigest()[:32]
-    rr = c.post(B + "/mcp", headers=dict(MH2, **{"X-Exam-Challenge": ch}),
+    rr = c.post(B + "/mcp_new", headers=dict(MH2, **{"X-Exam-Challenge": ch}),
                 json={"jsonrpc": "2.0", "id": 10 + i, "method": "tools/call",
                       "params": {"name": "solve_challenge", "arguments": {}}}).json()
     want = hashlib.sha256(f"{ch}:{EMAIL}".encode()).hexdigest()[:16]
@@ -77,21 +78,21 @@ for i in range(5):
 chk("Q6 five live challenges", allok)
 
 # Q8
-SB = "/srv/agent-redteam/sandbox-9a993617d5"
+SB = "/srv/agent-redteam/sandbox-6b038bd24c"
 seen = []
 for p, want in [(f"{SB}/notes/report.txt", "allow"),
                 (f"{SB}/notes/looks-like-..-but-safe.txt", "allow"),
                 (f"{SB}/encoded/%2e%2e-literal.txt", "allow"),
-                ("/srv/agent-redteam/outside-87c065e3/canary.txt", "block"),
-                (f"{SB}/../outside-87c065e3/canary.txt", "block"),
+                ("/srv/agent-redteam/outside-0a8eaf5d/canary.txt", "block"),
+                (f"{SB}/../outside-0a8eaf5d/canary.txt", "block"),
                 ("/etc/passwd", "block")]:
-    resp = post("/q8/check", {"tool": "read_file", "arguments": {"path": p}})
+    resp = post("/check_redteam_new", {"tool": "read_file", "arguments": {"path": p}})
     seen.append(resp.text)
     chk(f"Q8 {want}: {p[-42:]}", resp.json()["action"] == want, resp.json().get("reason"))
 for u, want in [("https://example.com/", "allow"), ("https://www.iana.org/", "allow"),
                 ("http://169.254.169.254/latest/meta-data/", "block"),
                 ("https://example.com@evil.example/", "block")]:
-    resp = post("/q8/check", {"tool": "fetch_url", "arguments": {"url": u}})
+    resp = post("/check_redteam_new", {"tool": "fetch_url", "arguments": {"url": u}})
     seen.append(resp.text)
     chk(f"Q8 {want}: {u[:40]}", resp.json()["action"] == want, resp.json().get("reason"))
 chk("Q8 canary never leaked live", not any(CANARY in s for s in seen))
@@ -184,7 +185,7 @@ if r9.status_code == 200:
 card = c.get(B + "/.well-known/agent-card.json")
 chk("Q10 card 200", card.status_code == 200)
 cj = card.json()
-chk("Q10 card base url", any(i.get("url") == "https://ga5-tds.onrender.com/a2a/" for i in cj.get("supportedInterfaces", [])), cj.get("supportedInterfaces"))
+chk("Q10 card base url", any(i.get("url") == B + "/a2a/" for i in cj.get("supportedInterfaces", [])), cj.get("supportedInterfaces"))
 AH = {"A2A-Version": "1.0", "Content-Type": "application/a2a+json", "Authorization": "Bearer live-principal"}
 msg = {"message": {"messageId": "live-m1", "role": "ROLE_USER",
                    "parts": [{"mediaType": "application/vnd.ga5.invoice-claim-batch+json",
@@ -203,8 +204,9 @@ if r10.status_code == 200:
         c.get(B + f"/a2a/tasks/{t['id']}", headers=dict(AH, Authorization="Bearer other")).status_code in (403, 404))
 chk("Q10 no-auth 401/403", c.get(B + "/a2a/tasks", headers={"A2A-Version": "1.0"}).status_code in (401, 403))
 
-# Q11
-inc = {"profile": "ga5-incident-agent/v2", "runId": "live-run-1", "agentName": "incident-response",
+# Q11 - use Render (persistent DB); Vercel /tmp is ephemeral across invocations
+B11 = "https://ga5-tds.onrender.com"
+inc = {"profile": "ga5-incident-agent/v2", "runId": f"live-run-{int(time.time())}", "agentName": "incident-response",
        "publicMarker": "marker-live", "sensitive": {"accessToken": "tok_never_export", "privateNote": "secret note"},
        "incident": {"incidentId": "I1", "title": "Checkout latency", "service": "checkout-api", "severity": "SEV-1",
                     "transcript": "[ev_a01] p99 latency rose to 4s at 10:02\n[ev_a02] pg pool waiting count spiked\n[ev_a03] marketing sent a newsletter\n[ev_a04] deploy 42 shipped a new connection pool size",
@@ -215,7 +217,7 @@ inc = {"profile": "ga5-incident-agent/v2", "runId": "live-run-1", "agentName": "
        "policy": {"maximumDiagnostics": 3, "effectTools": ["scale_service", "rollback_deployment"],
                   "approvalRequiredFor": ["rollback_deployment", "disable_feature"],
                   "doNotExport": ["tok_never_export", "secret note"]}}
-r11 = post("/v2/incidents", inc)
+r11 = c.post(B11 + "/v2/incidents", json=inc)
 chk("Q11 incidents 200", r11.status_code == 200, r11.text[:160])
 if r11.status_code == 200:
     j = r11.json()
@@ -226,5 +228,14 @@ if r11.status_code == 200:
     chk("Q11 no sensitive leak", "tok_never_export" not in r11.text and "secret note" not in r11.text)
     chk("Q11 no unapproved destructive",
         not any(d["toolName"] == "rollback_deployment" for d in j["dispatches"]))
+    # 409 conflict detection (same runId, changed publicMarker)
+    inc_changed = dict(inc)
+    inc_changed["publicMarker"] = "CHANGED_MARKER"
+    r11c = c.post(B11 + "/v2/incidents", json=inc_changed)
+    chk("Q11 conflict 409", r11c.status_code == 409, r11c.status_code)
+    # GET returns stored state
+    r11g = c.get(B11 + f"/v2/incidents/{inc['runId']}")
+    chk("Q11 GET 200", r11g.status_code == 200, r11g.status_code)
 
 print("\n" + ("ALL LIVE CHECKS PASSED" if not fails else f"{len(fails)} FAILED: {fails}"))
+
