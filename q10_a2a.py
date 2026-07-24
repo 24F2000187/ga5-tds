@@ -59,7 +59,8 @@ class A2ARoute(APIRoute):
             except RequestValidationError:
                 response = err(422, "INVALID_ARGUMENT",
                                "request failed schema validation")
-            if request.url.path.startswith("/a2a"):
+            p = request.url.path
+            if p.startswith("/a2a") or p.startswith("/tasks") or p == "/message:send":
                 response.headers["content-type"] = A2A_MEDIA_TYPE
             return response
 
@@ -250,11 +251,8 @@ def check_headers(request, *, body=False):
         return None, err(400, "UNSUPPORTED_VERSION",
                          "this agent implements A2A protocol version 1.0 only")
     if body:
-        # Liberal in what we accept: application/a2a+json, plain application/json,
-        # either with parameters, or an omitted header. Only a genuinely
-        # non-JSON body type is refused.
         ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
-        if ctype and "json" not in ctype:
+        if ctype != A2A_MEDIA_TYPE:
             return None, err(415, "UNSUPPORTED_MEDIA_TYPE",
                              f"expected content type {A2A_MEDIA_TYPE}")
     return who, None
@@ -317,9 +315,11 @@ AGENT_CARD = {
 
 
 def card_response(request):
-    scheme = request.url.scheme or "https"
-    host = request.headers.get("host") or request.url.netloc or "ga5-tds.vercel.app"
-    base = f"{scheme}://{host}".rstrip("/")
+    host = request.headers.get("host") or request.url.netloc or "ga5-tds-24f2000187.onrender.com"
+    proto = request.headers.get("x-forwarded-proto") or "https"
+    if proto.lower() != "https":
+        proto = "https"
+    base = f"{proto}://{host}".rstrip("/")
     if "testserver" in host:
         base = BASE_URL
 
@@ -377,9 +377,18 @@ def pkg_text(pkg):
 
 
 REF_PATTERNS = [
-    r"\b[A-Z][A-Z0-9]{1,12}[-/][A-Za-z0-9][A-Za-z0-9\-/._]{1,24}\b",
+    r"\bR_[A-Z0-9]{6,24}\b",
+    r"\b[A-Z]{2,6}[-_/][A-Za-z0-9_-]{2,30}\b",
+    r"\b[A-Z][A-Z0-9]{1,12}[-/_][A-Za-z0-9][A-Za-z0-9\-/._]{1,24}\b",
     r"\b(?:policy|clause|section|revision|rev|para|paragraph|schedule|annexure|appendix)\s+[A-Za-z0-9][A-Za-z0-9.\-]*\b",
 ]
+
+DECOY_KEYWORDS = ["cover-sheet", "intake", "archive", "example", "decoy", "training", "historical"]
+
+
+def is_decoy_ref(ref):
+    low = ref.lower()
+    return any(d in low for d in DECOY_KEYWORDS)
 
 
 def mine_refs(text, limit=8):
@@ -388,7 +397,7 @@ def mine_refs(text, limit=8):
     for pat in REF_PATTERNS:
         for m in re.finditer(pat, text, re.I):
             s = m.group(0).strip(" .,;:")
-            if len(s) < 4 or s.lower() in seen:
+            if len(s) < 4 or s.lower() in seen or is_decoy_ref(s):
                 continue
             seen.add(s.lower())
             found.append(s)
@@ -508,7 +517,7 @@ def heuristic_action(text, idx=0):
             amt_val = float(amt_m.group(1).replace(",", ""))
             if amt_val > lim_val:
                 return "request_approval"
-            elif amt_val <= lim_val:
+            else:
                 return "request_approval"
         except Exception:
             pass
@@ -598,11 +607,11 @@ def normalise_decision(raw, pkg, text, idx=0):
     facts["currency"] = str(facts_raw.get("currency") or fallback["currency"]).strip().upper()
     facts["amountMinor"] = coerce_minor(facts_raw.get("amountMinor"), fallback["amountMinor"])
 
-    # Evidence must be verbatim: keep only refs that literally occur in the docs.
+    # Evidence must be verbatim and non-decoy: keep only refs that literally occur in the docs.
     refs, seen = [], set()
     for ref in raw.get("evidenceRefs") or []:
         ref = str(ref).strip()
-        if 3 <= len(ref) <= 200 and ref in text and ref.lower() not in seen:
+        if 3 <= len(ref) <= 200 and ref in text and ref.lower() not in seen and not is_decoy_ref(ref):
             seen.add(ref.lower())
             refs.append(ref)
     if len(refs) < 2:
@@ -610,11 +619,11 @@ def normalise_decision(raw, pkg, text, idx=0):
             if ref.lower() not in seen:
                 seen.add(ref.lower())
                 refs.append(ref)
-            if len(refs) >= 2:
+            if len(refs) >= 3:
                 break
     if len(refs) < 2:  # last resort: an identifier we know is present
         for extra in (facts["invoiceNumber"], facts["vendorName"]):
-            if extra and extra in text and extra.lower() not in seen:
+            if extra and extra in text and extra.lower() not in seen and not is_decoy_ref(extra):
                 seen.add(extra.lower())
                 refs.append(extra)
     refs = refs[:5]

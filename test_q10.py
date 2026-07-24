@@ -223,20 +223,23 @@ check("Content-Type: agent card honours an a2a+json Accept",
 
 # ------------------------------------------------- liberal request accept
 
-for label, hdrs in [
-    ("a2a+json with charset", dict(CAROL, **{"Content-Type": "application/a2a+json; charset=utf-8"})),
-    ("plain application/json", dict(CAROL, **{"Content-Type": "application/json"})),
-]:
-    rr = client.post("/a2a/message:send",
-                     json=send_body(make_batch("BATCH-CT", prefix="CT"), "m-ctype"),
-                     headers=hdrs)
-    check(f"accepts request Content-Type: {label}", rr.status_code == 200,
-          f"{rr.status_code} {rr.text[:100]}")
-rr = client.post("/a2a/message:send", content=json.dumps(
+rr_valid = client.post("/a2a/message:send",
+                         json=send_body(make_batch("BATCH-CT", prefix="CT"), "m-ctype"),
+                         headers=dict(CAROL, **{"Content-Type": "application/a2a+json; charset=utf-8"}))
+check("accepts request Content-Type: a2a+json with charset", rr_valid.status_code == 200,
+      f"{rr_valid.status_code} {rr_valid.text[:100]}")
+
+rr_invalid = client.post("/a2a/message:send",
+                           json=send_body(make_batch("BATCH-CT", prefix="CT"), "m-ctype"),
+                           headers=dict(CAROL, **{"Content-Type": "application/json"}))
+check("rejects request Content-Type: plain application/json with 415", rr_invalid.status_code == 415,
+      f"{rr_invalid.status_code} {rr_invalid.text[:100]}")
+
+rr_no_ct = client.post("/a2a/message:send", content=json.dumps(
     send_body(make_batch("BATCH-CT", prefix="CT"), "m-ctype")),
     headers={"Authorization": "Bearer carol-token", "A2A-Version": "1.0"})
-check("accepts request with NO Content-Type header", rr.status_code == 200,
-      f"{rr.status_code} {rr.text[:100]}")
+check("rejects request with NO Content-Type header with 415", rr_no_ct.status_code == 415,
+      f"{rr_no_ct.status_code} {rr_no_ct.text[:100]}")
 rr = client.post("/a2a/message:send", content="not json",
                  headers=dict(CAROL, **{"Content-Type": "text/plain"}))
 check("still rejects a genuinely non-JSON Content-Type", rr.status_code == 415,
