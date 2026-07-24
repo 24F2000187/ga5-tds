@@ -5,6 +5,9 @@
       "use": "@vercel/python"
     }
   ],
+  "env": {
+    "Q11_SELF_COMPLETE": "0"
+  },
   "routes": [
     {
       "src": "/(.*)",
