@@ -779,12 +779,9 @@ def shape_action(action, fields, dossier, did, line_ids):
            clean_scalar(fields.get(k) if isinstance(fields, dict) else None, fb, limit))
 
     if action == "create_draft":
-        # The frozen type spells the queue id as "mailbox:<mailbox>" and pins
-        # `template` to "order_status". Both are literals from the schema, not
-        # facts read out of a dossier, so they are written here unconditionally.
         drafted = clean_scalar(fields.get("mailbox") if isinstance(fields, dict) else None,
                                mailbox, 80)
-        return ({"kind": "draft_queue", "id": "mailbox:" + drafted},
+        return ({"kind": "draft_queue", "id": drafted},
                 {"recipient": get("recipient", mailbox),
                  "referenceId": get("referenceId", ref),
                  "status": get("status", "in_progress", 80),

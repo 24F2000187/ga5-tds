@@ -6,3 +6,4 @@ __pycache__/
 captured/
 captured_q10/
 q11_stable/
+.vercel

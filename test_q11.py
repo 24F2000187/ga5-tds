@@ -11,6 +11,7 @@ import tempfile
 import uuid
 
 os.environ["GA5_DB"] = os.path.join(tempfile.gettempdir(), "ga5_test_q11_%s.db" % uuid.uuid4().hex)
+os.environ["Q11_DB_PATH"] = os.environ["GA5_DB"]
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

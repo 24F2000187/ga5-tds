@@ -41,10 +41,14 @@ async def normalise_path(request, call_next):
 
 MODULES = [
     "q3_guardrail",
+    "q3_guardrail_new",
     "q4_scanner",
     "q5_loopguard",
+    "q5_loopguard_new",
     "q6_mcp",
+    "q6_mcp_new",
     "q8_redteam",
+    "q8_redteam_new",
     "q9_mailroom",
     "q10_a2a",
     "q11_incident",
@@ -95,7 +99,13 @@ app.include_router(q2)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "modules": LOADED}
+    import q11_incident
+    return {
+        "status": "ok",
+        "modules": LOADED,
+        "q11_use_kv": getattr(q11_incident, "USE_KV", None),
+        "q11_db_path": q11_incident._db_path() if hasattr(q11_incident, "_db_path") else None
+    }
 
 
 @app.get("/")

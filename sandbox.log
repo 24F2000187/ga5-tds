@@ -1,14 +1,14 @@
-LXD_SANDBOX_START token=lxd_61c79be6d503e60d4afe2c8db0d9173864712cd5a9d7025d
-LXD_FS_ATTEMPT path=/opt/tds-lxd-canary/5730e6a310af.txt
+LXD_SANDBOX_START token=lxd_d71bc6303d3a0304bf4c1cb5572d1addede4f0342c0944af
+LXD_FS_ATTEMPT path=/tmp/tds-lxd-canary/c3206c423818.txt
 LXD_FS_BLOCKED status=1
-cat: /opt/tds-lxd-canary/5730e6a310af.txt: No such file or directory
+cat: /tmp/tds-lxd-canary/c3206c423818.txt: Permission denied
 
-LXD_NET_ATTEMPT token=lxd_61c79be6d503e60d4afe2c8db0d9173864712cd5a9d7025d
+LXD_NET_ATTEMPT token=lxd_d71bc6303d3a0304bf4c1cb5572d1addede4f0342c0944af
 LXD_NET_DONE status=6
-LXD_RESOURCE_ATTEMPT allocation_mb=1536 spin_seconds=7
+LXD_RESOURCE_ATTEMPT allocation_mb=1536 spin_seconds=5
 LXD_RESOURCE_LIMIT_HIT status=137
-LXD_SANDBOX_END token=lxd_61c79be6d503e60d4afe2c8db0d9173864712cd5a9d7025d
-probe.sh: line 60:   171 Killed                  python3 - "$ALLOCATION_MB" "$SPIN_SECONDS" <<'PY'
+LXD_SANDBOX_END token=lxd_d71bc6303d3a0304bf4c1cb5572d1addede4f0342c0944af
+lxd-sandbox-probe.sh: line 43:   123 Killed                  python3 - "$ALLOCATION_MB" "$SPIN_SECONDS" <<'PY'
 import sys, time
 allocation_mb = int(sys.argv[1])
 spin_seconds = int(sys.argv[2])
@@ -26,4 +26,3 @@ except MemoryError:
     print("LXD_RESOURCE_LIMIT_HIT memory_error")
     sys.exit(42)
 PY
-

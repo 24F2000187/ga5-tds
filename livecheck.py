@@ -204,8 +204,8 @@ if r10.status_code == 200:
         c.get(B + f"/a2a/tasks/{t['id']}", headers=dict(AH, Authorization="Bearer other")).status_code in (403, 404))
 chk("Q10 no-auth 401/403", c.get(B + "/a2a/tasks", headers={"A2A-Version": "1.0"}).status_code in (401, 403))
 
-# Q11 - use Render (persistent DB); Vercel /tmp is ephemeral across invocations
-B11 = "https://ga5-tds.onrender.com"
+# Q11 - Vercel (SELF_COMPLETE hardcoded False in code, so status:"waiting" on first response)
+B11 = "https://ga5-tds.vercel.app"
 inc = {"profile": "ga5-incident-agent/v2", "runId": f"live-run-{int(time.time())}", "agentName": "incident-response",
        "publicMarker": "marker-live", "sensitive": {"accessToken": "tok_never_export", "privateNote": "secret note"},
        "incident": {"incidentId": "I1", "title": "Checkout latency", "service": "checkout-api", "severity": "SEV-1",

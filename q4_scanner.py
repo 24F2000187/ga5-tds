@@ -290,7 +290,10 @@ def flatten(text):
 
 
 def detect_prompt_injection(body):
-    flat = flatten(body)
+    # Strip markdown code blocks to avoid false positives on literal commands/scripts
+    body_clean = re.sub(r"```[\s\S]*?```", " ", body)
+    body_clean = re.sub(r"`[^`\n]+`", " ", body_clean)
+    flat = flatten(body_clean)
     if CONTROL_OVERRIDE_RE.search(flat):
         return True
     if SECRECY_USER_RE.search(flat):
@@ -521,3 +524,8 @@ async def q4_scan(payload: dict = Body(...)):
     if isinstance(payload, dict):
         skill = payload.get("skill") or payload.get("content") or payload.get("text") or ""
     return {"categories": scan_skill(skill)}
+
+
+@router.post("/scan")
+async def q4_scan_alias(payload: dict = Body(...)):
+    return await q4_scan(payload)
