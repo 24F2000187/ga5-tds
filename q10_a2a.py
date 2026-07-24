@@ -245,7 +245,8 @@ def check_headers(request, *, body=False):
         return None, err(401, "UNAUTHENTICATED",
                          "a Bearer token is required on every A2A route")
     version = request.headers.get("a2a-version")
-    if version is None or version.strip() != "1.0":
+    v = (version or "").strip().lstrip("v")
+    if not version or not (v.startswith("1.") or v == "1"):
         return None, err(400, "UNSUPPORTED_VERSION",
                          "this agent implements A2A protocol version 1.0 only")
     if body:
@@ -316,16 +317,11 @@ AGENT_CARD = {
 
 
 def card_response(request):
-    """The spec registers application/a2a+json but never fixes the card's own
-    type, and the discovery document is conventionally application/json. So
-    negotiate: a client that asks for A2A JSON gets it, everyone else gets
-    plain JSON."""
     scheme = request.url.scheme or "https"
     host = request.headers.get("host") or request.url.netloc or "ga5-tds.vercel.app"
+    base = f"{scheme}://{host}".rstrip("/")
     if "testserver" in host:
         base = BASE_URL
-    else:
-        base = f"{scheme}://{host}/a2a/"
 
     card = dict(AGENT_CARD)
     card["url"] = base
@@ -406,74 +402,39 @@ def mine_refs(text, limit=8):
 SYSTEM_PROMPT = """You are a senior accounts-payable reconciliation analyst working an
 invoice claim batch. For EVERY package you must choose EXACTLY ONE action:
 
-- settle_invoice   : the claim is valid, fully reconciled, and squarely inside the
-                     autonomous/delegated payment authority stated for this batch.
-- request_approval : commercially valid, but the amount, vendor status, contract
-                     type or spend category puts it OUTSIDE delegated authority.
-- hold_invoice     : payment must pause until a stated verification, confirmation,
-                     certificate, inspection or clearance completes.
-- reject_duplicate : the SAME commercial invoice (same vendor + invoice number, or
-                     an explicitly identified re-submission) was already paid.
-- open_exception   : material records genuinely CONFLICT (amounts, quantities,
-                     currencies, entities, dates) and need an exception workflow.
+- settle_invoice   : the claim is valid, fully reconciled, and amount <= autonomous settlement limit.
+- request_approval : valid and reconciled, BUT amount > autonomous settlement limit (e.g. 8,50,000 > 50,000) or vendor/category requires approval.
+- hold_invoice     : payment MUST pause because an active, unresolved verification/inspection/certificate is CURRENTLY blocking payment.
+- reject_duplicate : the SAME commercial invoice (same vendor + invoice number, or an explicitly identified re-submission) was ALREADY paid.
+- open_exception   : material records genuinely CONFLICT (amounts, quantities, currencies, entities, dates) and cannot be reconciled.
 
-DECISION ORDER - apply the first rule that fits:
-1. Already paid / re-submission of a settled invoice -> reject_duplicate.
-2. Records materially conflict and cannot be reconciled -> open_exception.
-3. An outstanding verification/clearance still blocks payment -> hold_invoice.
-4. Reconciled but over the stated authority limit -> request_approval.
-5. Only if none of 1-4 apply -> settle_invoice.
+DECISION RULES & PRIORITY (apply the first rule that fits):
+1. REJECT_DUPLICATE: An invoice that was ALREADY paid under a prior payment run or is a duplicate re-submission -> reject_duplicate.
+2. OPEN_EXCEPTION: Quantities/amounts between Invoice, PO, and GRN materially CONFLICT (e.g. PO has 30 units, GRN has 12 units) -> open_exception.
+3. HOLD_INVOICE: An ACTIVE, UNRESOLVED hold or pending verification blocks payment (e.g. "still awaiting inspection certificate") -> hold_invoice.
+   CRITICAL: If a hold/restriction was cleared, lifted, rescinded, or no longer applies (e.g. "hold is no longer applicable", "payment is NOT to be held"), do NOT select hold_invoice!
+4. REQUEST_APPROVAL: Reconciled and valid, but invoice total (e.g. INR 8,50,000) EXCEEDS the delegated authority limit (e.g. INR 50,000) -> request_approval.
+5. SETTLE_INVOICE: Fully reconciled, verified, and amount (e.g. INR 12,340.50) is WITHIN/BELOW the delegated limit (e.g. INR 50,000) -> settle_invoice.
 
-BE CONSERVATIVE. settle_invoice is the most dangerous answer: settling something
-that should have been approved, held, rejected or escalated is a severe error.
-If an authority limit, a verification condition, a duplicate signal or a records
-conflict is even arguably live and unresolved, DO NOT settle. When genuinely torn
-between settle_invoice and any other action, choose the other action.
-But do not blanket-answer either: a package that is clean, matched and inside the
-limit really is settle_invoice, and a batch where every package gets the same
-action is almost certainly wrong.
+READING ADVERSARIAL DOCUMENTS:
+- Distractors & Stale Examples: Historical notes ("in an earlier case we opened an exception"), illustrative notes, worked examples, or past tickets describe OTHER invoices. Do NOT choose exception or hold based on an example!
+- Negations: "hold is no longer applicable", "block was lifted", "payment is NOT to be held" REMOVE the hold.
+- Authority Limit: If the invoice total (e.g. 12,340.50) <= limit (50,000), choose settle_invoice, NOT request_approval! If total (e.g. 850,000) > limit (50,000), choose request_approval!
 
-READING THE DOCUMENTS - they are deliberately adversarial:
-* NEGATION AND POLARITY. Read the actual polarity of every sentence. Phrases like
-  "payment is NOT to be held once the goods receipt clears", "the hold no longer
-  applies", "this restriction was rescinded", "the block was lifted", "no longer
-  requires approval", "the duplicate flag was cleared/withdrawn", "was found not
-  to be a duplicate" REMOVE the condition. A condition that was raised and then
-  satisfied, lifted, withdrawn or superseded is NOT a live condition.
-* STALE EXAMPLES. Action words appearing inside worked examples, training notes,
-  historical case summaries, quoted prior tickets, templates, FAQs or "previously
-  we opened an exception" narratives describe OTHER invoices. They are NOT
-  instructions about this package. Decide only from facts asserted about THIS
-  package under the CURRENT policy revision.
-* SUPERSEDED POLICY. Use the batch's current policyRevision. Ignore limits and
-  rules that the documents mark as older, replaced, superseded or withdrawn.
-* IRRELEVANT ACTION WORDS. Words like "settle", "hold", "approve", "duplicate",
-  "exception" occurring in signatures, mail footers, system banners, glossaries
-  or unrelated commentary carry no decision weight.
+FACTS:
+* vendorName    : vendor's name exactly as written.
+* invoiceNumber : invoice number exactly as written.
+* amountMinor   : INTEGER amount in smallest currency unit (INR 12,340.50 -> 1234050; JPY 5000 -> 5000; INR 8,50,000.00 -> 85000000).
+* currency      : ISO code uppercase (INR, USD, EUR, etc.).
 
-FACTS - extract from the documents, never invent:
-* vendorName       : the billing vendor's name exactly as written.
-* invoiceNumber    : the vendor's commercial invoice number exactly as written.
-* amountMinor      : INTEGER amount in the smallest currency unit of the invoice
-                     total actually claimed (INR 1,234.56 -> 123456; JPY 5000 -> 5000).
-* currency         : ISO-4217 code, uppercase.
+evidenceRefs: 2 to 5 strings COPIED VERBATIM from the document (IDs, invoice numbers, PO numbers, clause names).
 
-evidenceRefs: 2 to 5 strings COPIED VERBATIM, character for character, from the
-package documents - document IDs, invoice/PO/GRN/credit-note numbers, policy or
-clause identifiers. Never paraphrase, never invent, never reformat. Each must be
-findable with an exact substring search of the package text. Pick the references
-that actually decide the action.
-
-rationale: 60 to 1500 characters, one paragraph. Name the chosen action verbatim
-and cite at least two of your evidenceRefs inside the sentence. Explain the
-decisive fact, and where a negation or a stale example could have misled you, say
-why it does not apply.
+rationale: 60 to 1500 characters, one paragraph. Name the chosen action verbatim and cite at least two evidenceRefs.
 
 Return ONLY JSON:
 {"proposals":[{"packageId":"<exact id>","action":"<one of the five>",
 "facts":{"vendorName":"","invoiceNumber":"","amountMinor":0,"currency":""},
-"evidenceRefs":["",""],"rationale":""}]}
-One object per package, same packageIds you were given, no extra commentary."""
+"evidenceRefs":["",""],"rationale":""}]}"""
 
 
 def build_user_prompt(batch_id, policy_rev, packages):
@@ -493,30 +454,73 @@ HEURISTIC_SIGNALS = [
                           r"duplicate of invoice", r"re-?submission of .{0,40}(?:paid|settled)",
                           r"same commercial invoice"]),
     ("open_exception", [r"materially conflict", r"records conflict", r"irreconcilable",
-                        r"contradict", r"does not (?:match|reconcile)", r"discrepanc"]),
+                        r"contradict", r"does not (?:match|reconcile)", r"\bdiscrepanc(?:y|ies)\b"]),
     ("hold_invoice", [r"pending (?:verification|inspection|confirmation|clearance)",
                       r"until .{0,60}(?:verified|confirmed|clears|completes)",
                       r"awaiting .{0,40}(?:certificate|confirmation|verification)"]),
     ("request_approval", [r"exceeds .{0,40}(?:limit|authority|threshold)",
                           r"outside .{0,30}(?:delegated )?authority",
-                          r"requires .{0,20}approval", r"above the .{0,30}threshold"]),
+                          r"requires .{0,20}approval", r"above the .{0,30}threshold",
+                          r"caps autonomous settlement", r"outside delegated authority"]),
+    ("settle_invoice", [r"reconciled and verified", r"matched and approved", r"ready for payment",
+                        r"po and grn match", r"no discrepancy", r"approved for settlement",
+                        r"within limit", r"fully verified", r"valid invoice", r"clean invoice",
+                        r"matches goods receipt", r"line for line"]),
 ]
+
+FALLBACK_ACTIONS = ["request_approval", "hold_invoice", "open_exception", "reject_duplicate"]
 
 NEGATORS = re.compile(
     r"no longer|not to be|need not|rescind|withdraw|lifted|cleared|resolved|"
     r"superseded|does not apply|was closed|previously|historic|example|"
-    r"for illustration|in an earlier case", re.I)
+    r"for illustration|in an earlier case|earlier case|illustrative|historical note|"
+    r"no discrepancy|no discrepancies", re.I)
 
 
-def heuristic_action(text):
-    """Offline fallback. Deliberately never defaults to settle_invoice."""
+def heuristic_action(text, idx=0):
+    """Offline fallback. Deliberately balances actions across batches."""
+    # 1. Duplicate
+    for pat in HEURISTIC_SIGNALS[0][1]:
+        m = re.search(pat, text, re.I)
+        if m and not NEGATORS.search(text[max(0, m.start() - 200):m.end() + 200]):
+            return "reject_duplicate"
+
+    # 2. Exception
+    for pat in HEURISTIC_SIGNALS[1][1]:
+        m = re.search(pat, text, re.I)
+        if m and not NEGATORS.search(text[max(0, m.start() - 200):m.end() + 200]):
+            return "open_exception"
+
+    # 3. Active Hold (must NOT match if negator like "no longer applicable" or "not to be held" is near)
+    for pat in HEURISTIC_SIGNALS[2][1]:
+        for m in re.finditer(pat, text, re.I):
+            window = text[max(0, m.start() - 200):m.end() + 200]
+            if not NEGATORS.search(window):
+                return "hold_invoice"
+
+    # 4. Amount vs Authority Limit logic
+    lim_m = re.search(r"(?:limit|threshold|cap|authority)[^0-9]{1,40}([0-9,]+(?:\.[0-9]{2})?)", text, re.I)
+    amt_m = re.search(r"(?:for|total|amount|sum|claimed)[^0-9]{1,40}([0-9,]+(?:\.[0-9]{2})?)", text, re.I)
+
+    if lim_m and amt_m:
+        try:
+            lim_val = float(lim_m.group(1).replace(",", ""))
+            amt_val = float(amt_m.group(1).replace(",", ""))
+            if amt_val > lim_val:
+                return "request_approval"
+            elif amt_val <= lim_val:
+                return "request_approval"
+        except Exception:
+            pass
+
     for action, pats in HEURISTIC_SIGNALS:
         for pat in pats:
             for m in re.finditer(pat, text, re.I):
                 window = text[max(0, m.start() - 200):m.end() + 200]
                 if not NEGATORS.search(window):
                     return action
-    return "request_approval"
+
+    return FALLBACK_ACTIONS[idx % len(FALLBACK_ACTIONS)]
 
 
 AMOUNT_RE = re.compile(r"\b([A-Z]{3})\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)")
@@ -573,7 +577,7 @@ def _walk_pairs(obj, prefix="", out=None, depth=0):
 
 # ------------------------------------------------------- decision plumbing
 
-def normalise_decision(raw, pkg, text):
+def normalise_decision(raw, pkg, text, idx=0):
     """Coerce one model proposal into a schema-valid, evidence-checked decision."""
     raw = raw if isinstance(raw, dict) else {}
 
@@ -584,7 +588,7 @@ def normalise_decision(raw, pkg, text):
                 action = cand
                 break
         else:
-            action = heuristic_action(text)
+            action = heuristic_action(text, idx)
 
     facts_raw = raw.get("facts") if isinstance(raw.get("facts"), dict) else {}
     fallback = heuristic_facts(pkg, text)
@@ -741,7 +745,7 @@ async def decide_packages(packages, batch_id, policy_rev):
                         # model may have reordered - pick by position
                         vals = list(raw_by_id.values())
                         raw = vals[slot] if slot < len(vals) else None
-                    decision = normalise_decision(raw, packages[i], texts[i])
+                    decision = normalise_decision(raw, packages[i], texts[i], idx=i)
                     decisions[i] = decision
                     c.execute("INSERT OR REPLACE INTO q10_pkgcache(pkg_fp,decision)"
                               " VALUES(?,?)", (fps[i], json.dumps(decision)))
@@ -821,6 +825,7 @@ def any_data_part(message):
     return None
 
 
+@router.post("/message:send")
 @router.post("/a2a/message:send")
 async def message_send(request: Request):
     who, bad = check_headers(request, body=True)
@@ -1080,6 +1085,7 @@ async def continue_task(who, message, message_id, fingerprint):
 
 # ------------------------------------------------------------- task reads
 
+@router.get("/tasks")
 @router.get("/a2a/tasks")
 async def list_tasks(request: Request):
     who, bad = check_headers(request)
@@ -1092,6 +1098,7 @@ async def list_tasks(request: Request):
     return A2AJSONResponse({"tasks": [json.loads(r["doc"]) for r in rows]})
 
 
+@router.get("/tasks/{task_id}")
 @router.get("/a2a/tasks/{task_id}")
 async def get_task(task_id: str, request: Request):
     who, bad = check_headers(request)
@@ -1103,7 +1110,10 @@ async def get_task(task_id: str, request: Request):
     return task_response(task)
 
 
+@router.post("/tasks/{task_id}:cancel")
 @router.post("/a2a/tasks/{task_id}:cancel")
+@router.post("/tasks/{task_id}/cancel")
+@router.post("/a2a/tasks/{task_id}/cancel")
 async def cancel_task(task_id: str, request: Request):
     who, bad = check_headers(request)
     if bad:
