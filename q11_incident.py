@@ -775,10 +775,15 @@ def normalise_plan(raw, incident, catalog, policy, max_diag):
         tool = tool_by_name(candidates, item.get("toolName"))
         if not tool or any(d["toolName"] == tool["name"] for d in diagnostics):
             continue
+        raw_ev = clean_evidence(item.get("evidence"), index)
+        diag_ev = [e for e in raw_ev if e in evidence]
+        if not diag_ev:
+            diag_ev = list(evidence[:2])
+        dedup_ev = list(dict.fromkeys(diag_ev))
         diagnostics.append({
             "toolName": tool["name"],
             "arguments": coerce_arguments(tool, item.get("arguments"), incident),
-            "evidence": clean_evidence(item.get("evidence"), index) or evidence[:2],
+            "evidence": dedup_ev,
         })
     if not diagnostics and candidates:
         tool = candidates[0]
@@ -1450,6 +1455,7 @@ def bad_request(detail):
 
 
 @router.post("/v2/incidents")
+@router.post("/a2a/v2/incidents")
 async def create_incident(request: Request):
     try:
         body = await request.json()
@@ -1572,6 +1578,7 @@ CALLBACK_HINT = os.environ.get("Q11_CALLBACK_HINT", "0") != "0"
 
 
 @router.post("/v2/incidents/{run_id}/receipts")
+@router.post("/a2a/v2/incidents/{run_id}/receipts")
 async def post_receipt(run_id: str, request: Request):
     try:
         body = await request.json()
@@ -1652,6 +1659,7 @@ async def post_receipt(run_id: str, request: Request):
 
 
 @router.get("/v2/incidents/{run_id}")
+@router.get("/a2a/v2/incidents/{run_id}")
 async def get_incident(run_id: str):
     run = load_run(run_id)
     if not run:
@@ -1695,6 +1703,7 @@ def pending_approvals(state):
 
 
 @router.get("/v2/debug")
+@router.get("/a2a/v2/debug")
 async def debug_logs():
     """Return all captured request/response pairs for analysis."""
     try:

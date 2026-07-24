@@ -10,6 +10,8 @@ import logging
 import os
 import re
 
+os.environ.setdefault("Q11_SELF_COMPLETE", "0")
+
 from fastapi import APIRouter, FastAPI
 
 log = logging.getLogger("ga5")
@@ -54,13 +56,7 @@ MODULES = [
     "q11_incident",
 ]
 
-try:
-    import capture
-
-    app.middleware("http")(capture.middleware)
-    app.include_router(capture.router)
-except Exception:  # capture is diagnostics; never let it break the service
-    log.exception("capture unavailable")
+# capture middleware disabled to prevent body iterator side effects
 
 LOADED = {}
 for name in MODULES:
@@ -99,18 +95,12 @@ app.include_router(q2)
 
 @app.get("/health")
 async def health():
-    import q11_incident
-    return {
-        "status": "ok",
-        "modules": LOADED,
-        "q11_use_kv": getattr(q11_incident, "USE_KV", None),
-        "q11_db_path": q11_incident._db_path() if hasattr(q11_incident, "_db_path") else None
-    }
+    return {"status": "ok", "modules": LOADED}
 
 
 @app.get("/")
 async def root():
-    return {"service": "tds-ga5", "modules": LOADED}
+    return {"service": "tds-ga5", "version": "v15-durable", "modules": LOADED}
 
 
 if __name__ == "__main__":
