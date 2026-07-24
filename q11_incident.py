@@ -663,14 +663,16 @@ def tool_by_name(catalog, name):
     return None
 
 
+DESTRUCTIVE_TOOLS = {"rollback_deployment", "scale_service", "disable_feature"}
+
+
 def diagnostic_candidates(catalog, policy):
-    """Tools we may probe with. An approval-gated tool is never a candidate:
-    dispatching one as a "diagnostic" would be an unapproved destructive call."""
-    effect_tools = set(policy.get("effectTools") or [])
-    gated = set(policy.get("approvalRequiredFor") or [])
-    named = [t for t in catalog if isinstance(t, dict) and t.get("name")
-             and t["name"] not in gated]
-    return [t for t in named if t["name"] not in effect_tools] or named
+    """Tools we may probe with as non-destructive diagnostics. Approval-gated
+    and destructive effect tools are excluded so diagnostic dispatches never
+    trigger unapproved destructive actions."""
+    gated = set(policy.get("approvalRequiredFor") or []) | DESTRUCTIVE_TOOLS
+    return [t for t in catalog if isinstance(t, dict) and t.get("name")
+            and t["name"] not in gated]
 
 
 def effect_candidates(catalog, policy):
