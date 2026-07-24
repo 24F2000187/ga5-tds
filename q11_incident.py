@@ -593,6 +593,11 @@ def coerce_arguments(tool, raw_args, incident):
             args[key] = default_value(props.get(key) or {}, key, incident)
 
     for key, value in list(args.items()):
+        if "minute" in key.lower() or "window" in key.lower():
+            if isinstance(value, str):
+                digits = re.sub(r"\D", "", value)
+                args[key] = int(digits) if digits else 30
+                continue
         spec = props.get(key) or {}
         enum = spec.get("enum")
         if isinstance(enum, list) and enum and value not in enum:
@@ -646,8 +651,8 @@ def default_value(spec, key, incident):
         return incident.get("service") or "unknown"
     if "incident" in low:
         return incident.get("incidentId") or ""
-    if "window" in low or "range" in low or "period" in low:
-        return "30m"
+    if "window" in low or "range" in low or "period" in low or "minute" in low:
+        return 30
     return incident.get("service") or ""
 
 
